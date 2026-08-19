@@ -1,10 +1,9 @@
 /*
  * Ligação (opcional) do app a um banco de dados na nuvem — Firebase Firestore.
  *
- * Enquanto este ficheiro tiver os valores de exemplo abaixo, o app funciona
- * normalmente, mas guarda os sinais apenas no navegador de cada pessoa.
- *
- * Para partilhar o mesmo banco de sinais entre vários dispositivos:
+ * O projeto já está configurado (projeto Firebase: librascomiacamb). Os passos
+ * abaixo ficam registados para quem quiser ligar o app a outro projeto — basta
+ * substituir os valores no fim deste ficheiro.
  *
  *   1. Vá a https://console.firebase.google.com/ e crie um projeto
  *      (pode desativar o Google Analytics — não é preciso).
@@ -23,12 +22,13 @@
  * (ficheiro firestore.rules), por isso não salte o passo 6.
  */
 window.FIREBASE_CONFIG = {
-    apiKey: "COLE_AQUI_A_API_KEY",
-    authDomain: "COLE_AQUI_O_AUTH_DOMAIN",
-    projectId: "COLE_AQUI_O_PROJECT_ID",
-    storageBucket: "COLE_AQUI_O_STORAGE_BUCKET",
-    messagingSenderId: "COLE_AQUI_O_MESSAGING_SENDER_ID",
-    appId: "COLE_AQUI_O_APP_ID"
+    apiKey: "AIzaSyD0SpFjPQzD13960YVLLw6eJzEsOOewWXQ",
+    authDomain: "librascomiacamb.firebaseapp.com",
+    projectId: "librascomiacamb",
+    storageBucket: "librascomiacamb.firebasestorage.app",
+    messagingSenderId: "662641673906",
+    appId: "1:662641673906:web:5edc2b4e5bb2cf580eabab",
+    measurementId: "G-MQ51JFNKHS"
 };
 
 // Identifica o "espaço" de sinais dentro do banco de dados.

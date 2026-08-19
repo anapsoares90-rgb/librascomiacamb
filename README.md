@@ -44,9 +44,11 @@ Se preferir ativar manualmente: **Settings → Pages → Source: Deploy from a b
 
 ## Banco de dados na nuvem (Firebase)
 
-Sem configuração, o app funciona na mesma: cada pessoa guarda os seus sinais no próprio navegador. Configurar o Firebase serve para **a turma partilhar o mesmo banco de sinais** — grava-se um sinal num computador e ele aparece em todos os outros, em tempo real.
+O app está ligado ao projeto Firebase **`librascomiacamb`**: os sinais gravados vão para um banco de dados partilhado, em tempo real, entre todos os computadores que abrirem a app. As credenciais estão em [`firebase-config.js`](firebase-config.js) e as regras de segurança em [`firestore.rules`](firestore.rules).
 
-O ficheiro `firebase-config.js` já está ligado ao app e à espera das credenciais. Basta preencher:
+Se o distintivo no topo mostrar *"Armazenamento Local"* em vez de *"Banco de Dados Ativo"*, falta ativar alguma coisa no console — confirme os passos 2, 3 e 5 abaixo.
+
+Para ligar o app a **outro** projeto Firebase, o caminho é este:
 
 ### 1. Criar o projeto
 
@@ -67,7 +69,7 @@ O ficheiro `firebase-config.js` já está ligado ao app e à espera das credenci
 
 7. Clique na roda dentada → **Definições do projeto** → secção **As suas apps** → ícone **`</>`** (Web).
 8. Registe a app (qualquer nome) e copie o objeto `firebaseConfig` que aparece.
-9. Cole esses valores em `firebase-config.js`, substituindo os `COLE_AQUI_...`, e envie a alteração para o GitHub. O site publica-se sozinho em cerca de um minuto.
+9. Cole esses valores em `firebase-config.js` e envie a alteração para o GitHub. O site publica-se sozinho em cerca de um minuto.
 
 ### 5. Proteger os dados (não salte este passo)
 

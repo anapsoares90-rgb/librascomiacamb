@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tradutor de Libras - Protótipo com Movimento & Banco de Dados</title>
+    <meta name="description" content="Protótipo escolar de acessibilidade que traduz sinais de Libras captados pela câmara em texto e voz, com reconhecimento de movimento no navegador.">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%234f46e5'/%3E%3Ctext x='50' y='72' font-size='58' text-anchor='middle'%3E%F0%9F%A4%9F%3C/text%3E%3C/svg%3E">
+    
+    <!-- Tailwind CSS para design responsivo e moderno -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Ícones Lucide -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- TensorFlow.js Bundle unificado para evitar respostas 404 de CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose@0.0.7/dist/handpose.min.js"></script>
+    
+    <style>
+        .transition-all { transition: all 0.3s ease; }
+        .mirror { transform: scaleX(-1); }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #1e293b; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.7); }
+            70% { transform: scale(1.05); box-shadow: 0 0 0 12px rgba(244, 63, 94, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); }
+        }
+        .recording-pulse { animation: pulse-ring 1.8s infinite; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans flex flex-col justify-between select-none">
+
+    <header class="bg-slate-800 border-b border-slate-700 py-4 px-6 shadow-md">
+        <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+                <div class="bg-indigo-600 p-2.5 rounded-xl text-white shadow-lg shadow-indigo-500/30">
+                    <i data-lucide="accessibility" class="w-7 h-7"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                        Libras Gestos & Voz
+                        <span class="text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full uppercase tracking-wider font-semibold">Movimento Ativo</span>
+                    </h1>
+                    <p class="text-xs text-indigo-400 font-medium">Projeto Escolar de Acessibilidade • Rastreio de Trajetória & Nuvem</p>
+                </div>
+            </div>
+            
+            <!-- Badges de Status -->
+            <div class="flex items-center gap-2 flex-wrap">
+                <span id="badge-cloud" class="flex items-center gap-1.5 bg-slate-700 px-3 py-1.5 rounded-full text-xs text-slate-300 border border-slate-600">
+                    <i data-lucide="cloud" class="w-3.5 h-3.5 text-sky-400"></i>
+                    <span id="cloud-status-text">Conectando Banco de Dados...</span>
+                </span>
+                <span id="badge-status" class="flex items-center gap-2 bg-slate-700 px-3 py-1.5 rounded-full text-xs text-slate-300 border border-slate-600">
+                    <span class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" id="status-dot"></span>
+                    <span id="status-text">A carregar IA...</span>
+                </span>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-6xl w-full mx-auto p-4 sm:p-6 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- Painel da Câmara / Canvas com Rastreio de Movimento (Esquerda) -->
+        <div class="lg:col-span-7 bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden shadow-xl flex flex-col">
+            <div class="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800/50">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="video" class="text-indigo-400 w-5 h-5"></i>
+                    <span class="font-semibold text-sm" id="panel-title">Visualização & Rastreio de Trajetória</span>
+                </div>
+                <span id="camera-status" class="text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-full font-medium">
+                    A aguardar câmara...
+                </span>
+            </div>
+
+            <!-- Área do Vídeo e Canvas de Rastreamento de Movimento -->
+            <div class="relative bg-black flex-1 flex items-center justify-center min-h-[380px] sm:min-h-[440px] overflow-hidden group">
+                <video id="webcam" autoplay playsinline muted style="position: absolute; width: 1px; height: 1px; opacity: 0.01;"></video>
+                
+                <!-- Canvas para renderizar articulações e rasto do movimento -->
+                <canvas id="output-canvas" class="w-full h-full max-h-[460px] object-contain"></canvas>
+                
+                <!-- ÁREA DEDICADA DE GRAVAÇÃO / BOTÃO E ATALHO [ ESPAÇO ] -->
+                <div id="camera-controls-overlay" class="absolute bottom-4 left-0 right-0 px-4 flex justify-center items-center gap-3 z-20">
+                    <button id="cam-record-btn" onclick="iniciarGravacaoComTimer()" class="bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold py-3 px-6 rounded-full text-xs transition-all flex items-center gap-2 shadow-2xl border border-rose-400/40 cursor-pointer backdrop-blur-md bg-rose-600/90 recording-pulse">
+                        <i data-lucide="activity" class="w-4 h-4 animate-bounce text-white"></i>
+                        <span id="cam-record-label">Gravar Movimento (2.5s)</span>
+                    </button>
+                    
+                    <button id="cam-space-tip" onclick="iniciarGravacaoComTimer()" class="hidden sm:flex bg-slate-900/90 text-slate-200 hover:text-white font-medium py-3 px-4 rounded-full text-xs border border-slate-700 items-center gap-2 backdrop-blur-md shadow-lg cursor-pointer hover:bg-slate-800 transition-all">
+                        <kbd class="bg-indigo-600 text-white px-2 py-0.5 rounded border border-indigo-400 font-mono text-[11px] font-bold shadow-inner">Espaço</kbd>
+                        <span>Clique ou pressione para gravar</span>
+                    </button>
+                </div>
+
+                <div id="countdown-overlay" class="hidden absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-30 transition-all">
+                    <span class="text-xs font-bold text-rose-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                        <i data-lucide="disc" class="w-4 h-4 animate-spin"></i> Gravando Dinâmica do Movimento
+                    </span>
+                    <h2 id="recording-gesture-title" class="text-2xl font-extrabold text-white mb-2">A preparar captura...</h2>
+                    
+                    <!-- Barra de Progresso do Movimento -->
+                    <div class="w-64 bg-slate-800 h-3 rounded-full overflow-hidden border border-slate-700 my-4">
+                        <div id="recording-progress-bar" class="bg-gradient-to-r from-indigo-500 via-purple-500 to-rose-500 h-full w-0 transition-all duration-100"></div>
+                    </div>
+
+                    <div id="countdown-number" class="text-6xl font-black text-rose-500 mb-2">
+                        3
+                    </div>
+                    <p id="countdown-instructions" class="text-xs text-slate-300 max-w-xs leading-relaxed">
+                        Faça o movimento completo do sinal em frente à câmara! O aplicativo gravará a trajetória da mão.
+                    </p>
+                </div>
+
+                <div id="demo-mode-interface" class="hidden absolute inset-0 bg-slate-950 flex flex-col items-center justify-center p-6 text-center z-20">
+                    <h3 class="text-lg font-bold text-indigo-400 mb-2 flex items-center gap-2 justify-center">
+                        <i data-lucide="sparkles"></i> Modo de Simulação Ativo
+                    </h3>
+                    <p class="text-xs text-slate-400 max-w-sm mb-6">
+                        A câmara física não está conectada. Utilize o painel interativo abaixo para simular poses e trajetórias manuais.
+                    </p>
+                    
+                    <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col items-center gap-4 mb-4 w-full max-w-xs shadow-inner">
+                        <span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Simulador de Dedos Levantados</span>
+                        <div class="flex gap-2 justify-center">
+                            <button onclick="toggleFinger(0)" id="f-0" class="w-10 h-10 rounded-lg bg-slate-800 border border-slate-700 flex flex-col items-center justify-center text-[10px] font-bold text-slate-300">Pól<span class="text-[9px]">Off</span></button>
+                            <button onclick="toggleFinger(1)" id="f-1" class="w-10 h-10 rounded-lg bg-indigo-600 border border-indigo-400 flex flex-col items-center justify-center text-[10px] font-bold text-white">Ind<span class="text-[9px]">On</span></button>
+                            <button onclick="toggleFinger(2)" id="f-2" class="w-10 h-10 rounded-lg bg-indigo-600 border border-indigo-400 flex flex-col items-center justify-center text-[10px] font-bold text-white">Méd<span class="text-[9px]">On</span></button>
+                            <button onclick="toggleFinger(3)" id="f-3" class="w-10 h-10 rounded-lg bg-slate-800 border border-slate-700 flex flex-col items-center justify-center text-[10px] font-bold text-slate-300">Ane<span class="text-[9px]">Off</span></button>
+                            <button onclick="toggleFinger(4)" id="f-4" class="w-10 h-10 rounded-lg bg-slate-800 border border-slate-700 flex flex-col items-center justify-center text-[10px] font-bold text-slate-300">Mín<span class="text-[9px]">Off</span></button>
+                        </div>
+                    </div>
+
+                    <button onclick="recarregarPagina()" class="text-xs text-indigo-400 hover:text-indigo-300 underline flex items-center gap-1 cursor-pointer">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Reativar detecção de câmara
+                    </button>
+                </div>
+
+                <div id="loading-overlay" class="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-6 text-center z-10 transition-all">
+                    <div id="loader-spinner" class="flex flex-col items-center">
+                        <div class="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-indigo-500 mb-4"></div>
+                        <h3 class="text-lg font-semibold text-white">Carregando IA e Banco de Dados...</h3>
+                        <p class="text-sm text-slate-400 max-w-xs mt-1">Permita o acesso à câmara para iniciar o rastreio dinâmico.</p>
+                    </div>
+                    
+                    <div id="permission-error-panel" class="hidden max-w-md bg-slate-900 border border-red-500/30 p-6 rounded-2xl shadow-xl">
+                        <div class="bg-red-500/10 text-red-400 p-3 rounded-full w-fit mx-auto mb-3">
+                            <i data-lucide="video-off" class="w-8 h-8"></i>
+                        </div>
+                        <h3 class="text-lg font-bold text-red-400">Acesso à Câmara Não Disponível</h3>
+                        <p class="text-xs text-slate-300 mt-2 leading-relaxed">
+                            Você pode utilizar o modo de simulação para testar o cadastro e tradução de sinais!
+                        </p>
+                        <button onclick="ativarModoDemo()" class="mt-4 w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-4 rounded-xl text-xs transition-all cursor-pointer shadow-lg">
+                            Ativar Modo de Simulação Interativo
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-5 bg-slate-800 border-t border-slate-700 text-center flex flex-col items-center justify-center">
+                <span class="text-xs uppercase tracking-wider text-slate-400 font-bold mb-1 flex items-center gap-1.5">
+                    <i data-lucide="volume-2" class="w-4 h-4 text-indigo-400"></i> Tradução e Leitura de Voz em Tempo Real
+                </span>
+                
+                <div class="min-h-[64px] flex flex-col items-center justify-center my-1">
+                    <div id="detected-gesture" aria-live="polite" aria-atomic="true" class="text-3xl sm:text-4xl font-black text-indigo-400 tracking-wide transition-all">
+                        Nenhum gesto
+                    </div>
+                    <div id="detection-confidence" class="text-xs text-slate-400 mt-1 flex items-center gap-1">
+                        A aguardar movimento da mão...
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-3 mt-2">
+                    <button id="speak-btn" class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs px-4 py-2 rounded-full font-semibold transition-all border border-indigo-400/30 shadow-md cursor-pointer">
+                        <i data-lucide="volume-2" class="w-4 h-4"></i>
+                        Falar Texto Novamente
+                    </button>
+                    <label class="flex items-center gap-2 text-xs text-slate-400 cursor-pointer bg-slate-900/60 px-3 py-1.5 rounded-full border border-slate-700">
+                        <input type="checkbox" id="auto-speak-toggle" checked class="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500">
+                        <span>Voz Automática</span>
+                    </label>
+                </div>
+
+                <div class="mt-3 w-full max-w-sm flex items-center gap-2 bg-slate-900/90 px-3 py-1.5 rounded-xl border border-indigo-500/30 shadow-inner">
+                    <i data-lucide="user-check" class="w-4 h-4 text-rose-400 shrink-0"></i>
+                    <div class="flex-1 text-left min-w-0">
+                        <span class="text-[10px] text-indigo-300 block font-bold uppercase tracking-wider">Voz Humana Feminina</span>
+                        <select id="voice-select" class="bg-transparent text-xs text-slate-100 border-none focus:outline-none w-full cursor-pointer py-0.5 truncate font-medium">
+                            <option value="" class="bg-slate-800 text-slate-300">Carregando vozes disponíveis...</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="lg:col-span-5 flex flex-col gap-6">
+            
+            <!-- Explicação do Projeto -->
+            <div class="bg-gradient-to-br from-indigo-950/60 to-slate-900 border border-indigo-500/30 rounded-2xl p-5 shadow-lg">
+                <h3 class="text-indigo-300 font-bold flex items-center gap-2 mb-1.5 text-sm">
+                    <i data-lucide="sparkles" class="w-4 h-4 text-indigo-400"></i>
+                    IA com Reconhecimento de Movimento
+                </h3>
+                <p class="text-xs text-slate-300 leading-relaxed">
+                    Sinais em Libras envolvem deslocamentos da mão no espaço. Este protótipo grava a <strong>posição inicial, trajetórias de movimento e posição final</strong> dos dedos, salvando automaticamente no Banco de Dados em nuvem!
+                </p>
+            </div>
+
+            <!-- Formulário de Cadastro de Sinal -->
+            <div class="bg-slate-800 rounded-2xl border border-slate-700 p-5 shadow-xl">
+                <div class="flex items-center gap-2 mb-4 border-b border-slate-700 pb-3">
+                    <i data-lucide="plus-circle" class="text-indigo-400 w-5 h-5"></i>
+                    <h2 class="font-bold text-base text-white">Cadastrar Novo Gesto Dinâmico</h2>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label for="gesture-name" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">1. Nome da Palavra / Expressão</label>
+                        <div class="flex gap-2">
+                            <input type="text" id="gesture-name" placeholder="Ex: Bom dia, Por favor, Ajuda..." class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all">
+                            
+                            <button id="voice-input-btn" class="bg-slate-700 hover:bg-indigo-600 text-slate-300 hover:text-white p-2.5 rounded-xl border border-slate-600 transition-all cursor-pointer flex items-center justify-center shrink-0" title="Ditar por voz">
+                                <i data-lucide="mic" class="w-5 h-5"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Botão de Ação Direta -->
+                    <button onclick="iniciarGravacaoComTimer()" class="w-full bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-lg cursor-pointer">
+                        <i data-lucide="video" class="w-4 h-4"></i>
+                        <span>Iniciar Gravador de Movimento (2.5s)</span>
+                    </button>
+
+                    <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-700/60 text-[11px] text-slate-400 space-y-1.5">
+                        <p class="font-semibold text-indigo-300 flex items-center gap-1">
+                            <i data-lucide="info" class="w-3.5 h-3.5"></i> Dicas de gravação:
+                        </p>
+                        <p>• Pressione a tecla <kbd class="bg-slate-800 px-1.5 py-0.5 rounded text-white border border-slate-600 font-mono">Espaço</kbd> do teclado para disparar a contagem.</p>
+                        <p>• Mova a mão suavemente durante os 2.5 segundos de contagem para salvar o movimento completo.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-slate-800 rounded-2xl border border-slate-700 p-5 shadow-xl flex-1 flex flex-col min-h-[260px]">
+                <div class="flex justify-between items-center mb-3 border-b border-slate-700 pb-3">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="database" class="text-indigo-400 w-5 h-5"></i>
+                        <h2 class="font-bold text-base text-white">Banco de Dados de Sinais</h2>
+                    </div>
+                    <span id="gestures-count" class="text-xs bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 px-2.5 py-0.5 rounded-full font-mono font-bold">0</span>
+                </div>
+
+                <!-- Lista de Gestos Guardados em Nuvem -->
+                <div id="gestures-list" class="space-y-2 overflow-y-auto max-h-[220px] flex-1 pr-1 custom-scrollbar">
+                    <div id="no-gestures-message" class="text-center py-8 text-slate-500 text-sm flex flex-col items-center justify-center gap-2">
+                        <i data-lucide="cloud-off" class="w-8 h-8 opacity-40"></i>
+                        Nenhum sinal no banco de dados.<br>Cadastre sua primeira palavra acima!
+                    </div>
+                </div>
+                
+                <button id="clear-database" class="mt-3 text-[11px] text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 py-2 px-3 rounded-lg border border-rose-500/20 text-center transition-all cursor-pointer font-medium flex items-center justify-center gap-1.5">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Limpar Banco de Dados
+                </button>
+            </div>
+
+        </div>
+    </main>
+
+    <div id="custom-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl max-w-sm w-full p-6 shadow-2xl text-center">
+            <div id="modal-icon" class="w-12 h-12 bg-indigo-600/20 text-indigo-400 rounded-full flex items-center justify-center mx-auto mb-3 border border-indigo-500/30">
+                <i data-lucide="help-circle" class="w-6 h-6"></i>
+            </div>
+            <h3 id="modal-title" class="text-lg font-bold text-white mb-2">Confirmação</h3>
+            <p id="modal-message" class="text-xs text-slate-300 mb-6 leading-relaxed">Mensagem de confirmação aqui...</p>
+            <div class="flex gap-3 justify-center">
+                <button id="modal-cancel-btn" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-4 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer">Cancelar</button>
+                <button id="modal-confirm-btn" class="bg-rose-600 hover:bg-rose-500 text-white px-4 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <footer class="bg-slate-950 border-t border-slate-800 py-3 px-6 text-center">
+        <p class="text-xs text-slate-500">
+            Protótipo de Acessibilidade Escolar • Tradução com Inteligência Artificial, Dinâmica de Gestos e Banco de Dados
+        </p>
+    </footer>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Configuração OPCIONAL do Firebase.
+        // Sem credenciais, o app funciona 100% offline guardando os sinais no navegador.
+        // Para ativar a nuvem, defina window.FIREBASE_CONFIG antes deste script (ver README.md).
+        let firebaseConfig = null;
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            try { firebaseConfig = JSON.parse(__firebase_config); } catch (e) { firebaseConfig = null; }
+        } else if (window.FIREBASE_CONFIG && window.FIREBASE_CONFIG.apiKey) {
+            firebaseConfig = window.FIREBASE_CONFIG;
+        }
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'libras-gestos-app';
+
+        let db = null;
+        let auth = null;
+        let currentUser = null;
+
+        function marcarArmazenamentoLocal() {
+            const cloudText = document.getElementById('cloud-status-text');
+            if (cloudText) cloudText.textContent = "Armazenamento Local";
+        }
+
+        async function initCloudDatabase() {
+            if (!firebaseConfig) {
+                marcarArmazenamentoLocal();
+                return;
+            }
+            try {
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                currentUser = auth.currentUser;
+
+                const cloudBadge = document.getElementById('badge-cloud');
+                const cloudText = document.getElementById('cloud-status-text');
+                if (cloudBadge && cloudText) {
+                    cloudText.textContent = "Banco de Dados Ativo";
+                    cloudBadge.className = "flex items-center gap-1.5 bg-sky-950/60 px-3 py-1.5 rounded-full text-xs text-sky-300 border border-sky-500/30";
+                }
+
+                const gesturesCol = collection(db, 'artifacts', appId, 'public', 'data', 'gestures');
+                onSnapshot(gesturesCol, (snapshot) => {
+                    const cloudGestures = [];
+                    snapshot.forEach((docSnap) => {
+                        cloudGestures.push({ id: docSnap.id, ...docSnap.data() });
+                    });
+                    if (window.syncCloudGestures) {
+                        window.syncCloudGestures(cloudGestures);
+                    }
+                }, (error) => {
+                    console.warn("Nuvem em modo local/offline:", error);
+                    marcarArmazenamentoLocal();
+                });
+
+            } catch (err) {
+                console.warn("Modo local ativado para armazenamento:", err);
+                marcarArmazenamentoLocal();
+            }
+        }
+
+        window.saveGestureToCloud = async function(gestureObj) {
+            if (!db || !currentUser) return;
+            try {
+                const docId = gestureObj.id || 'gesture_' + Date.now();
+                gestureObj.id = docId;
+                const ref = doc(db, 'artifacts', appId, 'public', 'data', 'gestures', docId);
+                await setDoc(ref, gestureObj);
+            } catch (e) {
+                console.error("Erro ao salvar no Firestore:", e);
+            }
+        };
+
+        window.deleteGestureFromCloud = async function(docId) {
+            if (!db || !currentUser) return;
+            try {
+                const ref = doc(db, 'artifacts', appId, 'public', 'data', 'gestures', docId);
+                await deleteDoc(ref);
+            } catch (e) {
+                console.error("Erro ao excluir do Firestore:", e);
+            }
+        };
+
+        initCloudDatabase();
+    </script>
+
+    <script>
+        if (window.lucide) {
+            lucide.createIcons();
+        }
+
+        // Elementos da Interface
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output-canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loaderSpinner = document.getElementById('loader-spinner');
+        const permissionErrorPanel = document.getElementById('permission-error-panel');
+        const cameraStatusSpan = document.getElementById('camera-status');
+        const detectedGestureText = document.getElementById('detected-gesture');
+        const detectionConfidenceText = document.getElementById('detection-confidence');
+        const gestureNameInput = document.getElementById('gesture-name');
+        const voiceInputBtn = document.getElementById('voice-input-btn');
+        const countdownOverlay = document.getElementById('countdown-overlay');
+        const countdownNumber = document.getElementById('countdown-number');
+        const countdownInstructions = document.getElementById('countdown-instructions');
+        const recordingProgressBar = document.getElementById('recording-progress-bar');
+        const recordingGestureTitle = document.getElementById('recording-gesture-title');
+        const gesturesListContainer = document.getElementById('gestures-list');
+        const gesturesCountSpan = document.getElementById('gestures-count');
+        const noGesturesMsg = document.getElementById('no-gestures-message');
+        const speakBtn = document.getElementById('speak-btn');
+        const autoSpeakToggle = document.getElementById('auto-speak-toggle');
+        const voiceSelect = document.getElementById('voice-select');
+        const clearDbBtn = document.getElementById('clear-database');
+        const statusText = document.getElementById('status-text');
+        const statusDot = document.getElementById('status-dot');
+        const demoModeInterface = document.getElementById('demo-mode-interface');
+        const panelTitle = document.getElementById('panel-title');
+
+        // Modal Customizado
+        const customModal = document.getElementById('custom-modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalMessage = document.getElementById('modal-message');
+        const modalConfirmBtn = document.getElementById('modal-confirm-btn');
+        const modalCancelBtn = document.getElementById('modal-cancel-btn');
+
+        // Estados do Aplicativo
+        let handposeModel = null;
+        let lastHandLandmarks = null;
+        let lastSpokenText = "";
+        let speakTimeout = null;
+        let isDemoModeActive = false;
+        let isRecording = false;
+        let availableVoices = [];
+
+        // Banco de dados de sinais (persistido no navegador e, opcionalmente, na nuvem)
+        const STORAGE_KEY = 'LIBRAS_PROTOTIPO_GESTOS';
+        let trainedGestures = [];
+        // Historico recente de posicoes da mao, usado para desenhar e comparar trajetórias
+        let frameBuffer = [];
+        // Estado dos dedos no simulador manual (polegar, indicador, medio, anelar, minimo)
+        let demoFingers = [false, true, true, false, false];
+
+        function carregarGestosLocais() {
+            try {
+                const guardados = localStorage.getItem(STORAGE_KEY);
+                trainedGestures = guardados ? JSON.parse(guardados) : [];
+            } catch (e) {
+                console.warn("Não foi possível ler o armazenamento local:", e);
+                trainedGestures = [];
+            }
+            if (!Array.isArray(trainedGestures)) trainedGestures = [];
+        }
+
+        function guardarGestosLocais() {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(trainedGestures));
+            } catch (e) {
+                console.warn("Não foi possível guardar no armazenamento local:", e);
+            }
+        }
+
+        function criarBotaoAcao(icone, titulo, classes, onClick) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.title = titulo;
+            btn.setAttribute('aria-label', titulo);
+            btn.className = classes;
+            btn.innerHTML = `<i data-lucide="${icone}" class="w-3.5 h-3.5"></i>`;
+            btn.addEventListener('click', onClick);
+            return btn;
+        }
+
+        function updateGesturesListUI() {
+            gesturesCountSpan.textContent = trainedGestures.length;
+            gesturesListContainer.innerHTML = '';
+
+            if (trainedGestures.length === 0) {
+                noGesturesMsg.classList.remove('hidden');
+                gesturesListContainer.appendChild(noGesturesMsg);
+                if (window.lucide) lucide.createIcons();
+                return;
+            }
+
+            noGesturesMsg.classList.add('hidden');
+
+            trainedGestures.forEach((gesto) => {
+                const item = document.createElement('div');
+                item.className = "flex items-center justify-between gap-2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 transition-all hover:border-indigo-500/40";
+
+                const info = document.createElement('div');
+                info.className = "min-w-0 text-left";
+
+                const nome = document.createElement('p');
+                nome.className = "text-sm font-semibold text-white truncate";
+                nome.textContent = gesto.name;
+
+                const detalhe = document.createElement('p');
+                detalhe.className = "text-[10px] text-slate-400";
+                const vetor = gesto.motionVector || { x: 0, y: 0 };
+                const temMovimento = Math.hypot(vetor.x, vetor.y) > 15;
+                detalhe.textContent = gesto.isDemo
+                    ? "Sinal simulado (sem câmara)"
+                    : (temMovimento ? "Sinal com trajetória de movimento" : "Sinal estático");
+
+                info.appendChild(nome);
+                info.appendChild(detalhe);
+
+                const acoes = document.createElement('div');
+                acoes.className = "flex items-center gap-1.5 shrink-0";
+                acoes.appendChild(criarBotaoAcao(
+                    'volume-2',
+                    `Ouvir "${gesto.name}"`,
+                    "p-2 rounded-lg bg-slate-800 border border-slate-700 text-indigo-300 hover:text-white hover:bg-indigo-600 transition-all cursor-pointer",
+                    () => falarTexto(gesto.name)
+                ));
+                acoes.appendChild(criarBotaoAcao(
+                    'trash-2',
+                    `Remover "${gesto.name}"`,
+                    "p-2 rounded-lg bg-slate-800 border border-slate-700 text-rose-400 hover:text-white hover:bg-rose-600 transition-all cursor-pointer",
+                    () => window.confirmDeleteGesture(gesto.id || gesto.name)
+                ));
+
+                item.appendChild(info);
+                item.appendChild(acoes);
+                gesturesListContainer.appendChild(item);
+            });
+
+            if (window.lucide) lucide.createIcons();
+        }
+
+        // Recebe os sinais vindos do Firestore e junta-os aos que já existem no dispositivo
+        window.syncCloudGestures = function(cloudGestures) {
+            if (!Array.isArray(cloudGestures)) return;
+            const porId = new Map();
+            cloudGestures.forEach(g => { if (g && g.name) porId.set(g.id || g.name, g); });
+            trainedGestures.forEach(g => {
+                const chave = g.id || g.name;
+                if (!porId.has(chave)) porId.set(chave, g);
+            });
+            trainedGestures = Array.from(porId.values());
+            guardarGestosLocais();
+            updateGesturesListUI();
+        };
+
+        function carregarVozesFemininas() {
+            if (!('speechSynthesis' in window)) return;
+            
+            const allVoices = window.speechSynthesis.getVoices();
+            if (!allVoices || allVoices.length === 0) return;
+
+            // Filtra vozes em Português
+            const ptVoices = allVoices.filter(v => v.lang.startsWith('pt') || v.lang.includes('pt-BR') || v.lang.includes('pt-PT'));
+            availableVoices = ptVoices.length > 0 ? ptVoices : allVoices;
+
+            if (voiceSelect) {
+                voiceSelect.innerHTML = '';
+                
+                // Padrões de nomes de vozes femininas e neurais/naturais conhecidas (Google, Francisca, Luciana, Raquel, Vitória, etc)
+                const femaleKeywords = /(female|feminina|francisca|raquel|luciana|heloisa|maria|vitória|vitoria|letícia|leticia|joana|sâmia|samia|google|natural|neural)/i;
+
+                let bestFemaleIndex = 0;
+
+                availableVoices.forEach((voice, index) => {
+                    const option = document.createElement('option');
+                    option.value = index;
+                    const isFemaleOrNatural = femaleKeywords.test(voice.name);
+                    option.textContent = `${voice.name} (${voice.lang})${isFemaleOrNatural ? ' 👩' : ''}`;
+                    option.className = "bg-slate-800 text-slate-100";
+                    
+                    if (isFemaleOrNatural && bestFemaleIndex === 0) {
+                        bestFemaleIndex = index;
+                    }
+                    
+                    voiceSelect.appendChild(option);
+                });
+
+                // Seleciona automaticamente a melhor voz feminina/natural encontrada
+                voiceSelect.selectedIndex = bestFemaleIndex;
+            }
+        }
+
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.onvoiceschanged = carregarVozesFemininas;
+            carregarVozesFemininas();
+        }
+
+        function falarTexto(texto) {
+            if (!texto || !('speechSynthesis' in window)) return;
+            try {
+                window.speechSynthesis.cancel();
+
+                const utterance = new SpeechSynthesisUtterance(texto);
+                utterance.lang = 'pt-BR';
+                
+                // Modulação para tom humano, suave e natural (elimina o som robótico plano)
+                utterance.rate = 0.95;  // Ritmo de fala levemente mais fluido e humano
+                utterance.pitch = 1.08; // Elevação suave para tom feminino natural
+
+                if (availableVoices.length > 0 && voiceSelect && voiceSelect.value !== '') {
+                    const selectedIndex = parseInt(voiceSelect.value, 10);
+                    if (availableVoices[selectedIndex]) {
+                        utterance.voice = availableVoices[selectedIndex];
+                    }
+                } else {
+                    const voices = window.speechSynthesis.getVoices();
+                    const femaleKeywords = /(francisca|raquel|luciana|heloisa|maria|vitória|vitoria|letícia|leticia|joana|google|natural|neural)/i;
+                    const ptFemaleVoice = voices.find(v => (v.lang.includes('pt-BR') || v.lang.includes('pt-PT')) && femaleKeywords.test(v.name)) 
+                                        || voices.find(v => v.lang.includes('pt-BR') || v.lang.includes('pt-PT'));
+                    if (ptFemaleVoice) utterance.voice = ptFemaleVoice;
+                }
+
+                window.speechSynthesis.speak(utterance);
+            } catch(e) {
+                console.warn("Erro ao reproduzir síntese de voz:", e);
+            }
+        }
+
+        window.testSpeak = function(text) {
+            falarTexto(text);
+        };
+
+        window.confirmDeleteGesture = function(identifier) {
+            showCustomModal("Excluir Gesto", "Deseja remover este sinal do Banco de Dados?", () => {
+                trainedGestures = trainedGestures.filter(g => (g.id !== identifier && g.name !== identifier));
+                guardarGestosLocais();
+                if (window.deleteGestureFromCloud) window.deleteGestureFromCloud(identifier);
+                updateGesturesListUI();
+                showToast("Gesto removido do banco de dados!");
+            });
+        };
+
+        clearDbBtn.addEventListener('click', () => {
+            showCustomModal("Limpar Todo o Banco de Dados", "Tem certeza que deseja apagar TODOS os sinais gravados do sistema?", () => {
+                trainedGestures.forEach(g => {
+                    if (g.id && window.deleteGestureFromCloud) window.deleteGestureFromCloud(g.id);
+                });
+                trainedGestures = [];
+                localStorage.removeItem(STORAGE_KEY);
+                updateGesturesListUI();
+                showToast("Todos os gestos foram removidos!");
+            });
+        });
+
+        // Ditado por voz no campo de entrada
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'pt-BR';
+
+            voiceInputBtn.addEventListener('click', () => {
+                try {
+                    voiceInputBtn.classList.add('bg-rose-600', 'text-white', 'animate-pulse');
+                    showToast("Fale a palavra agora no microfone...");
+                    recognition.start();
+                } catch(e) { console.log("Ditado já ativo"); }
+            });
+
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                gestureNameInput.value = transcript.replace('.', '');
+                voiceInputBtn.classList.remove('bg-rose-600', 'text-white', 'animate-pulse');
+                showToast(`Palavra ditada: "${gestureNameInput.value}"`);
+            };
+
+            recognition.onerror = () => voiceInputBtn.classList.remove('bg-rose-600', 'text-white', 'animate-pulse');
+            recognition.onend = () => voiceInputBtn.classList.remove('bg-rose-600', 'text-white', 'animate-pulse');
+        } else {
+            voiceInputBtn.style.display = 'none';
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && document.activeElement !== gestureNameInput) {
+                e.preventDefault();
+                iniciarGravacaoComTimer();
+            }
+        });
+
+        window.toggleFinger = function(index) {
+            demoFingers[index] = !demoFingers[index];
+            atualizarBotoesDemo();
+            if (isDemoModeActive) processarGestoDemo();
+        };
+
+        function atualizarBotoesDemo() {
+            for (let i = 0; i < 5; i++) {
+                const btn = document.getElementById(`f-${i}`);
+                if (!btn) continue;
+                const statusSpan = btn.querySelector('span:last-child');
+                if (demoFingers[i]) {
+                    btn.className = "w-10 h-10 rounded-lg bg-indigo-600 border border-indigo-400 flex flex-col items-center justify-center text-[10px] font-bold text-white";
+                    if (statusSpan) statusSpan.textContent = "On";
+                } else {
+                    btn.className = "w-10 h-10 rounded-lg bg-slate-800 border border-slate-700 flex flex-col items-center justify-center text-[10px] font-bold text-slate-400";
+                    if (statusSpan) statusSpan.textContent = "Off";
+                }
+            }
+        }
+
+        window.ativarModoDemo = function() {
+            isDemoModeActive = true;
+            loadingOverlay.classList.add('hidden');
+            demoModeInterface.classList.remove('hidden');
+            panelTitle.textContent = "Simulador Manual de Gestos";
+            cameraStatusSpan.textContent = "Modo de Simulação";
+            cameraStatusSpan.className = "text-xs bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 px-2 py-1 rounded-full";
+            statusText.textContent = "Simulador Ativo";
+            statusDot.className = "w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse";
+            atualizarBotoesDemo();
+            updateGesturesListUI();
+            processarGestoDemo();
+        };
+
+        function extrairCaracteristicasMao(landmarks) {
+            const pulso = landmarks[0];
+            const baseMedio = landmarks[9];
+            const tamanhoMao = calcularDistancia3D(pulso, baseMedio) || 1;
+
+            const centroX = baseMedio[0];
+            const centroY = baseMedio[1];
+
+            const pontas = [4, 8, 12, 16, 20];
+            const extensoes = pontas.map(p => calcularDistancia3D(pulso, landmarks[p]) / tamanhoMao);
+
+            return {
+                centro: { x: centroX, y: centroY },
+                extensoes: extensoes,
+                landmarks: landmarks
+            };
+        }
+
+        function calcularDistancia3D(p1, p2) {
+            return Math.sqrt(
+                Math.pow(p1[0] - p2[0], 2) +
+                Math.pow(p1[1] - p2[1], 2) +
+                Math.pow(p1[2] - p2[2], 2)
+            );
+        }
+
+        window.iniciarGravacaoComTimer = function() {
+            const nomeGesto = gestureNameInput.value.trim();
+
+            if (!nomeGesto) {
+                showToast("Digite o nome da palavra/sinal primeiro!");
+                gestureNameInput.focus();
+                return;
+            }
+
+            if (isDemoModeActive) {
+                salvarGestoFormatado(nomeGesto);
+                return;
+            }
+
+            if (isRecording) return;
+
+            isRecording = true;
+            recordingGestureTitle.textContent = `Gravando sinal: "${nomeGesto}"`;
+            countdownInstructions.textContent = "Realize o movimento dinâmico da mão no ar agora!";
+            countdownOverlay.classList.remove('hidden');
+            recordingProgressBar.style.width = "0%";
+
+            let countdownVal = 3;
+            countdownNumber.textContent = countdownVal;
+            falarTexto("Atenção");
+
+            const countInterval = setInterval(() => {
+                countdownVal--;
+                if (countdownVal > 0) {
+                    countdownNumber.textContent = countdownVal;
+                } else {
+                    clearInterval(countInterval);
+                    capturarMovimentoDinamico(nomeGesto);
+                }
+            }, 800);
+        };
+
+        function capturarMovimentoDinamico(nomeGesto) {
+            countdownNumber.textContent = "🎬";
+            countdownInstructions.textContent = "Mova a mão! Capturando o gesto...";
+            
+            const amostrasTrajetoria = [];
+            const duracaoMs = 2500;
+            const startTime = Date.now();
+
+            falarTexto("Gravando");
+
+            const captureInterval = setInterval(() => {
+                const tempoDecorrido = Date.now() - startTime;
+                const progresso = Math.min(100, (tempoDecorrido / duracaoMs) * 100);
+                recordingProgressBar.style.width = `${progresso}%`;
+
+                if (lastHandLandmarks) {
+                    amostrasTrajetoria.push(extrairCaracteristicasMao(lastHandLandmarks));
+                }
+
+                if (tempoDecorrido >= duracaoMs) {
+                    clearInterval(captureInterval);
+                    processarEGuardarSinal(nomeGesto, amostrasTrajetoria);
+                }
+            }, 80);
+        }
+
+        function processarEGuardarSinal(nomeGesto, amostras) {
+            if (amostras.length < 5) {
+                showToast("Não foi possível detectar a mão durante o movimento. Tente novamente!");
+                countdownOverlay.classList.add('hidden');
+                isRecording = false;
+                return;
+            }
+
+            const inicial = amostras[0];
+            const final = amostras[amostras.length - 1];
+
+            const vetorX = final.centro.x - inicial.centro.x;
+            const vetorY = final.centro.y - inicial.centro.y;
+
+            const extensoesMedias = [0, 0, 0, 0, 0];
+            amostras.forEach(s => {
+                s.extensoes.forEach((val, idx) => extensoesMedias[idx] += val / amostras.length);
+            });
+
+            const dadosGesto = {
+                id: 'gesto_' + Date.now(),
+                name: nomeGesto,
+                motionVector: { x: vetorX, y: vetorY },
+                fingerStates: extensoesMedias,
+                amostrasCount: amostras.length
+            };
+
+            const indexExistente = trainedGestures.findIndex(g => g.name.toLowerCase() === nomeGesto.toLowerCase());
+            if (indexExistente !== -1) {
+                trainedGestures[indexExistente] = dadosGesto;
+            } else {
+                trainedGestures.push(dadosGesto);
+            }
+
+            guardarGestosLocais();
+            if (window.saveGestureToCloud) window.saveGestureToCloud(dadosGesto);
+
+            gestureNameInput.value = "";
+            updateGesturesListUI();
+
+            falarTexto(`Gesto ${nomeGesto} gravado com sucesso!`);
+            showToast(`Gesto "${nomeGesto}" gravado com movimento!`);
+
+            setTimeout(() => {
+                countdownOverlay.classList.add('hidden');
+                isRecording = false;
+            }, 600);
+        }
+
+        function salvarGestoFormatado(nomeGesto) {
+            const dadosDemo = {
+                id: 'demo_' + Date.now(),
+                name: nomeGesto,
+                motionVector: { x: 0, y: 0 },
+                fingerStates: [...demoFingers],
+                isDemo: true
+            };
+            trainedGestures.push(dadosDemo);
+            guardarGestosLocais();
+            if (window.saveGestureToCloud) window.saveGestureToCloud(dadosDemo);
+            gestureNameInput.value = "";
+            updateGesturesListUI();
+            processarGestoDemo();
+            showToast(`Sinal "${nomeGesto}" cadastrado!`);
+        }
+
+        function reconhecerGestoReal(landmarks) {
+            if (trainedGestures.length === 0) {
+                detectionConfidenceText.textContent = "Nenhum sinal gravado no Banco de Dados.";
+                return;
+            }
+
+            const caracteristicaAtual = extrairCaracteristicasMao(landmarks);
+            frameBuffer.push(caracteristicaAtual);
+            if (frameBuffer.length > 25) frameBuffer.shift();
+
+            if (frameBuffer.length < 5) return;
+
+            const inicioBuffer = frameBuffer[0];
+            const fimBuffer = frameBuffer[frameBuffer.length - 1];
+            const deslocamentoAtualX = fimBuffer.centro.x - inicioBuffer.centro.x;
+            const deslocamentoAtualY = fimBuffer.centro.y - inicioBuffer.centro.y;
+
+            let melhorGesto = null;
+            let menorErro = Infinity;
+
+            trainedGestures.forEach(gesto => {
+                if (gesto.fingerStates) {
+                    let erroDedos = 0;
+                    caracteristicaAtual.extensoes.forEach((ext, i) => {
+                        erroDedos += Math.abs(ext - gesto.fingerStates[i]);
+                    });
+
+                    let erroMovimento = 0;
+                    if (gesto.motionVector) {
+                        erroMovimento = Math.hypot(deslocamentoAtualX - gesto.motionVector.x, deslocamentoAtualY - gesto.motionVector.y);
+                    }
+
+                    const erroTotal = erroDedos * 1.5 + erroMovimento * 0.01;
+
+                    if (erroTotal < menorErro) {
+                        menorErro = erroTotal;
+                        melhorGesto = gesto;
+                    }
+                }
+            });
+
+            const limiteAceitavel = 1.8;
+
+            if (melhorGesto && menorErro < limiteAceitavel) {
+                const precisao = Math.max(0, Math.min(100, Math.round((1 - (menorErro / limiteAceitavel)) * 100)));
+                detectedGestureText.textContent = melhorGesto.name;
+                detectionConfidenceText.textContent = `Sinal identificado • Precisão: ${precisao}%`;
+
+                if (melhorGesto.name !== lastSpokenText && autoSpeakToggle.checked) {
+                    lastSpokenText = melhorGesto.name;
+                    clearTimeout(speakTimeout);
+                    speakTimeout = setTimeout(() => {
+                        falarTexto(melhorGesto.name);
+                    }, 300);
+                }
+            } else {
+                detectedGestureText.textContent = "Sinal não reconhecido";
+                detectionConfidenceText.textContent = "Posicione a mão ou faça o movimento gravado";
+                lastSpokenText = "";
+            }
+        }
+
+        function processarGestoDemo() {
+            if (trainedGestures.length === 0) {
+                detectedGestureText.textContent = "Nenhum gesto";
+                detectionConfidenceText.textContent = "Cadastre uma palavra no simulador!";
+                return;
+            }
+
+            let melhorGesto = null;
+            trainedGestures.forEach(g => {
+                if (g.isDemo) melhorGesto = g;
+            });
+
+            if (melhorGesto) {
+                detectedGestureText.textContent = melhorGesto.name;
+                detectionConfidenceText.textContent = "Sinal simulado identificado com sucesso";
+                if (melhorGesto.name !== lastSpokenText && autoSpeakToggle.checked) {
+                    lastSpokenText = melhorGesto.name;
+                    falarTexto(melhorGesto.name);
+                }
+            }
+        }
+
+        function drawHandKeypointsAndTrajectory(landmarks) {
+            canvasCtx.fillStyle = '#6366f1';
+            canvasCtx.strokeStyle = '#ffffff';
+            canvasCtx.lineWidth = 2.5;
+
+            if (frameBuffer.length > 1) {
+                canvasCtx.beginPath();
+                canvasCtx.strokeStyle = '#f43f5e';
+                canvasCtx.lineWidth = 4;
+                for (let i = 0; i < frameBuffer.length - 1; i++) {
+                    const pt1 = frameBuffer[i].centro;
+                    const pt2 = frameBuffer[i+1].centro;
+                    canvasCtx.moveTo(canvasElement.width - pt1.x, pt1.y);
+                    canvasCtx.lineTo(canvasElement.width - pt2.x, pt2.y);
+                }
+                canvasCtx.stroke();
+            }
+
+            const connections = [
+                [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8],
+                [0, 9], [9, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15], [15, 16],
+                [0, 17], [17, 18], [18, 19], [19, 20]
+            ];
+
+            canvasCtx.strokeStyle = '#818cf8';
+            canvasCtx.lineWidth = 2.5;
+            connections.forEach(([p1, p2]) => {
+                const pt1 = landmarks[p1];
+                const pt2 = landmarks[p2];
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(canvasElement.width - pt1[0], pt1[1]);
+                canvasCtx.lineTo(canvasElement.width - pt2[0], pt2[1]);
+                canvasCtx.stroke();
+            });
+
+            landmarks.forEach((landmark) => {
+                canvasCtx.beginPath();
+                canvasCtx.arc(canvasElement.width - landmark[0], landmark[1], 5, 0, 2 * Math.PI);
+                canvasCtx.fillStyle = '#f43f5e';
+                canvasCtx.fill();
+            });
+        }
+
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+                    audio: false
+                });
+                videoElement.srcObject = stream;
+                return new Promise((resolve) => {
+                    videoElement.onloadedmetadata = async () => {
+                        await videoElement.play();
+                        resolve(videoElement);
+                    };
+                });
+            } catch (err) {
+                cameraStatusSpan.textContent = "Câmara Indisponível";
+                cameraStatusSpan.className = "text-xs bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2.5 py-1 rounded-full";
+                loaderSpinner.classList.add('hidden');
+                permissionErrorPanel.classList.remove('hidden');
+                throw err;
+            }
+        }
+
+        async function mainLoop() {
+            if (document.hidden) { requestAnimationFrame(mainLoop); return; }
+            if (isDemoModeActive) return;
+
+            if (videoElement.videoWidth && videoElement.videoHeight) {
+                if (canvasElement.width !== videoElement.videoWidth) {
+                    canvasElement.width = videoElement.videoWidth;
+                    canvasElement.height = videoElement.videoHeight;
+                }
+
+                canvasCtx.save();
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                canvasCtx.scale(-1, 1);
+                canvasCtx.drawImage(videoElement, -canvasElement.width, 0, canvasElement.width, canvasElement.height);
+                canvasCtx.restore();
+
+                if (handposeModel) {
+                    try {
+                        const predictions = await handposeModel.estimateHands(videoElement);
+                        if (predictions && predictions.length > 0) {
+                            lastHandLandmarks = predictions[0].landmarks;
+                            drawHandKeypointsAndTrajectory(lastHandLandmarks);
+                            if (!isRecording) reconhecerGestoReal(lastHandLandmarks);
+                        } else {
+                            lastHandLandmarks = null;
+                            if (!isRecording) {
+                                detectionConfidenceText.textContent = "Aponta a mão para a câmara";
+                                if (detectedGestureText.textContent !== "Nenhum gesto") {
+                                    detectedGestureText.textContent = "Nenhum gesto";
+                                    lastSpokenText = "";
+                                }
+                            }
+                        }
+                    } catch (e) { console.error("Erro na predição:", e); }
+                }
+            }
+            requestAnimationFrame(mainLoop);
+        }
+
+        speakBtn.addEventListener('click', () => {
+            const gesto = detectedGestureText.textContent;
+            if (gesto && gesto !== "Nenhum gesto" && gesto !== "Sinal não reconhecido") {
+                falarTexto(gesto);
+            }
+        });
+
+        function showToast(msg) {
+            const toast = document.createElement('div');
+            toast.className = "fixed bottom-5 right-5 bg-indigo-600 text-white py-3 px-5 rounded-2xl shadow-2xl text-xs font-bold z-50 transition-all border border-indigo-400/30";
+            toast.textContent = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.classList.add('opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 2500);
+        }
+
+        function showCustomModal(title, msg, onConfirm) {
+            modalTitle.textContent = title;
+            modalMessage.textContent = msg;
+            customModal.classList.remove('hidden');
+
+            const handleConfirm = () => {
+                customModal.classList.add('hidden');
+                modalConfirmBtn.removeEventListener('click', handleConfirm);
+                onConfirm();
+            };
+            const handleCancel = () => {
+                customModal.classList.add('hidden');
+                modalCancelBtn.removeEventListener('click', handleCancel);
+            };
+
+            modalConfirmBtn.onclick = handleConfirm;
+            modalCancelBtn.onclick = handleCancel;
+        }
+
+        window.recarregarPagina = function() { window.location.reload(); };
+
+        async function run() {
+            try {
+                statusText.textContent = "A iniciar câmara...";
+                await setupCamera();
+                
+                statusText.textContent = "A carregar modelo IA...";
+                cameraStatusSpan.textContent = "Câmara Ativa";
+                cameraStatusSpan.className = "text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full font-medium";
+
+                if (window.handpose) {
+                    handposeModel = await handpose.load();
+                } else {
+                    throw new Error("Biblioteca Handpose não disponível");
+                }
+
+                statusText.textContent = "Sistema Pronto";
+                statusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse";
+                loadingOverlay.classList.add('hidden');
+
+                updateGesturesListUI();
+                mainLoop();
+            } catch (err) {
+                console.warn("Falha no carregamento inicial da câmara/modelo:", err);
+                if (!isDemoModeActive) {
+                    loaderSpinner.classList.add('hidden');
+                    permissionErrorPanel.classList.remove('hidden');
+                }
+            }
+        }
+
+        carregarGestosLocais();
+        updateGesturesListUI();
+        atualizarBotoesDemo();
+
+        window.addEventListener('DOMContentLoaded', () => {
+            run();
+        });
+    </script>
+</body>
+</html>

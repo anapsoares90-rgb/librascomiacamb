@@ -291,6 +291,9 @@
         </p>
     </footer>
 
+    <!-- Configuração (opcional) do banco de dados na nuvem -->
+    <script src="firebase-config.js"></script>
+
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
@@ -302,10 +305,11 @@
         let firebaseConfig = null;
         if (typeof __firebase_config !== 'undefined' && __firebase_config) {
             try { firebaseConfig = JSON.parse(__firebase_config); } catch (e) { firebaseConfig = null; }
-        } else if (window.FIREBASE_CONFIG && window.FIREBASE_CONFIG.apiKey) {
+        } else if (window.FIREBASE_CONFIG && typeof window.FIREBASE_CONFIG.apiKey === 'string'
+                   && !window.FIREBASE_CONFIG.apiKey.startsWith('COLE_AQUI')) {
             firebaseConfig = window.FIREBASE_CONFIG;
         }
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'libras-gestos-app';
+        const appId = (typeof __app_id !== 'undefined' && __app_id) ? __app_id : (window.LIBRAS_APP_ID || 'libras-gestos-app');
 
         let db = null;
         let auth = null;
@@ -340,6 +344,8 @@
                     cloudBadge.className = "flex items-center gap-1.5 bg-sky-950/60 px-3 py-1.5 rounded-full text-xs text-sky-300 border border-sky-500/30";
                 }
 
+                window.cloudAtivo = true;
+
                 const gesturesCol = collection(db, 'artifacts', appId, 'public', 'data', 'gestures');
                 onSnapshot(gesturesCol, (snapshot) => {
                     const cloudGestures = [];
@@ -351,6 +357,7 @@
                     }
                 }, (error) => {
                     console.warn("Nuvem em modo local/offline:", error);
+                    window.cloudAtivo = false;
                     marcarArmazenamentoLocal();
                 });
 
@@ -531,16 +538,28 @@
             if (window.lucide) lucide.createIcons();
         }
 
-        // Recebe os sinais vindos do Firestore e junta-os aos que já existem no dispositivo
+        let primeiraSincronizacaoNuvem = true;
+
+        // Recebe os sinais vindos do Firestore.
+        // Na primeira sincronização envia para a nuvem os sinais que só existiam
+        // neste dispositivo; a partir daí a nuvem é a fonte de verdade, para que
+        // apagar um sinal num dispositivo o apague em todos os outros.
         window.syncCloudGestures = function(cloudGestures) {
             if (!Array.isArray(cloudGestures)) return;
-            const porId = new Map();
-            cloudGestures.forEach(g => { if (g && g.name) porId.set(g.id || g.name, g); });
-            trainedGestures.forEach(g => {
-                const chave = g.id || g.name;
-                if (!porId.has(chave)) porId.set(chave, g);
-            });
-            trainedGestures = Array.from(porId.values());
+            const daNuvem = cloudGestures.filter(g => g && g.name);
+
+            if (primeiraSincronizacaoNuvem) {
+                primeiraSincronizacaoNuvem = false;
+                const idsNaNuvem = new Set(daNuvem.map(g => g.id));
+                const porEnviar = trainedGestures.filter(g => g.id && !idsNaNuvem.has(g.id));
+                porEnviar.forEach(g => {
+                    if (window.saveGestureToCloud) window.saveGestureToCloud(g);
+                });
+                trainedGestures = daNuvem.concat(porEnviar);
+            } else {
+                trainedGestures = daNuvem;
+            }
+
             guardarGestosLocais();
             updateGesturesListUI();
         };
@@ -1124,6 +1143,21 @@
                 }
             }
         }
+
+        // Se a nuvem não estiver configurada (ou se as bibliotecas do Firebase não
+        // carregarem, p. ex. numa rede escolar que bloqueie CDNs), o distintivo
+        // deixa de ficar preso em "Conectando..." e assume o modo local.
+        function revelarEstadoDoArmazenamento() {
+            const cloudText = document.getElementById('cloud-status-text');
+            if (!cloudText || window.cloudAtivo) return;
+            const cfg = window.FIREBASE_CONFIG;
+            const configurado = cfg && typeof cfg.apiKey === 'string' && !cfg.apiKey.startsWith('COLE_AQUI');
+            if (!configurado || cloudText.textContent.startsWith('Conectando')) {
+                cloudText.textContent = "Armazenamento Local";
+            }
+        }
+        revelarEstadoDoArmazenamento();
+        setTimeout(revelarEstadoDoArmazenamento, 6000);
 
         carregarGestosLocais();
         updateGesturesListUI();

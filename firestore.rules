@@ -1,0 +1,26 @@
+rules_version = '2';
+
+// Regras de segurança do banco de dados de sinais.
+// Copie este conteúdo para: Firebase Console → Firestore Database → Regras → Publicar.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Banco de sinais partilhado pela turma.
+    // Só quem abriu a app (e por isso tem sessão anónima) pode ler e escrever.
+    match /artifacts/{appId}/public/data/gestures/{gestureId} {
+      allow read: if request.auth != null;
+
+      allow create, update: if request.auth != null
+                            && request.resource.data.name is string
+                            && request.resource.data.name.size() > 0
+                            && request.resource.data.name.size() <= 60;
+
+      allow delete: if request.auth != null;
+    }
+
+    // Tudo o resto fica fechado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
